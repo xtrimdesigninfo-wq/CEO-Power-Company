@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Eye, EyeOff, ShieldCheck, AlertCircle, Lock, ArrowLeft, KeyRound, Home } from 'lucide-react';
+import { Eye, EyeOff, ShieldCheck, AlertCircle, Lock, ArrowLeft, Home } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { authService } from '../../services/authService';
 import { getFirstAllowedAdminRoute } from '../../lib/permissions';
@@ -29,7 +29,6 @@ export default function AdminLogin() {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<AdminLoginFormData>({
     resolver: zodResolver(adminLoginSchema),
@@ -71,11 +70,6 @@ export default function AdminLogin() {
         setAdminRoleError(err.message);
       }
     }
-  };
-
-  const handleQuickFill = () => {
-    setValue('usernameOrEmail', 'xtrimdesign');
-    setValue('password', 'Le123456789');
   };
 
   return (
@@ -221,17 +215,9 @@ export default function AdminLogin() {
             </Button>
           </form>
 
-          {/* Quick Fill Helper for Verification */}
+          {/* Compliance Notice */}
           <div className="mt-6 pt-5 border-t border-[#187004]/30 flex flex-col items-center">
-            <button
-              type="button"
-              onClick={handleQuickFill}
-              className="inline-flex items-center gap-1.5 text-xs text-emerald-300/80 hover:text-white hover:underline transition-colors py-1 px-2.5 rounded-lg bg-white/5 border border-white/10"
-            >
-              <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Fill Admin Credentials (xtrimdesign)</span>
-            </button>
-            <p className="mt-3 text-[11px] text-emerald-100/50 text-center leading-relaxed">
+            <p className="text-[11px] text-emerald-100/50 text-center leading-relaxed">
               Authorized personnel only. All access attempts are recorded for compliance.
             </p>
           </div>

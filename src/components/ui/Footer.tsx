@@ -42,7 +42,7 @@ export function Footer({
           {showAdminLink && (
             <Link
               to="/admin/login"
-              className="font-semibold text-slate-300 hover:text-white underline decoration-slate-400/60 underline-offset-4 transition-colors shrink-0"
+              className="font-medium text-emerald-300/75 hover:text-emerald-200 underline decoration-emerald-500/40 underline-offset-4 transition-colors shrink-0"
             >
               Admin Console
             </Link>
