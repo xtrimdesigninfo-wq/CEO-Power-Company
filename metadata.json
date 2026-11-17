@@ -1,0 +1,6 @@
+{
+  "name": "CEO Power Company — Reseller Portal",
+  "description": "Private B2B ordering portal for authorized resellers of CEO Power Company. Browse solar products at wholesale trade prices and submit verified orders directly via WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

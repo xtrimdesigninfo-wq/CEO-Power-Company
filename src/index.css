@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #187004;
+  --color-brand-hover: #135903;
+  --color-brand-dark: #0e3e03;
+  --color-brand-light: #f0f8ed;
+  --color-navy-900: #0e3e03;
+  --color-navy-800: #115203;
+  --color-navy-700: #187004;
+  --color-navy-600: #1e8705;
+  --color-solar-gold: #F5A623;
+  --color-green-600: #187004;
+  --color-green-700: #135903;
+  --color-red-600: #DC2626;
+  --color-whatsapp: #25D366;
+  --color-whatsapp-dark: #1EBE5D;
+  --color-surface: #F8FAF8;
+  --color-ink: #111827;
+  --color-muted: #64748B;
+  --font-heading: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+:root {
+  font-family: var(--font-sans);
+  color: #111827;
+  background-color: #F8FAF8;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  line-height: 1.55;
+  letter-spacing: -0.005em;
+}
+
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-heading);
+  letter-spacing: -0.02em;
+}
+
+h1, h2, h3 {
+  text-wrap: balance;
+}
+
+.font-mono, code, kbd, pre {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbar for desktop tables and image carousels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* FloatingWhatsApp menu staggered card entrance & spring-physics button transitions */
+@keyframes wa-menu-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes wa-option-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.975);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes wa-fab-spring-open {
+  0% {
+    transform: scale(0.91);
+  }
+  38% {
+    transform: scale(1.075);
+  }
+  66% {
+    transform: scale(0.982);
+  }
+  86% {
+    transform: scale(1.018);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes wa-fab-spring-close {
+  0% {
+    transform: scale(0.92);
+  }
+  40% {
+    transform: scale(1.065);
+  }
+  68% {
+    transform: scale(0.985);
+  }
+  88% {
+    transform: scale(1.014);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes wa-fab-content-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.84) translate3d(0, 4px, 0);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.04) translate3d(0, -1px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+}
+
+.wa-menu-enter {
+  transform-origin: bottom right;
+  animation: wa-menu-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.wa-option-card {
+  animation: wa-option-enter 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.wa-option-delay-0 {
+  animation-delay: 45ms;
+}
+
+.wa-option-delay-1 {
+  animation-delay: 105ms;
+}
+
+.wa-option-delay-2 {
+  animation-delay: 165ms;
+}
+
+.wa-option-delay-3 {
+  animation-delay: 225ms;
+}
+
+.wa-quick-reply-enter {
+  animation: wa-option-enter 340ms cubic-bezier(0.22, 1, 0.36, 1) 210ms both;
+  will-change: transform, opacity;
+}
+
+.wa-fab-spring {
+  transition-property: transform, background-color, box-shadow, color, border-color;
+  transition-duration: 380ms;
+  transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+}
+
+.wa-fab-spring:hover {
+  transform: translate3d(0, -2px, 0) scale(1.025);
+}
+
+.wa-fab-spring:active {
+  transform: translate3d(0, 1px, 0) scale(0.955);
+  transition-duration: 120ms;
+}
+
+.wa-fab-spring-open {
+  animation: wa-fab-spring-open 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.wa-fab-spring-close {
+  animation: wa-fab-spring-close 440ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.wa-fab-content-enter {
+  animation: wa-fab-content-enter 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wa-menu-enter,
+  .wa-option-card,
+  .wa-quick-reply-enter,
+  .wa-fab-spring-open,
+  .wa-fab-spring-close,
+  .wa-fab-content-enter {
+    animation: none !important;
+  }
+
+  .wa-fab-spring {
+    transition-duration: 0.01ms !important;
+  }
+}
+
