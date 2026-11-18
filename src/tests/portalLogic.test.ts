@@ -24,6 +24,9 @@ import {
   normalizeWhatsAppNumber,
   formatWhatsAppDisplay,
   DEFAULT_WHATSAPP_NUMBER,
+  DEFAULT_WHATSAPP_THEME,
+  normalizeWhatsAppTheme,
+  toggleWhatsAppTheme,
 } from '../lib/whatsapp';
 import {
   getSimilarProducts,
@@ -72,6 +75,13 @@ import {
   buildAlertFingerprint,
   evaluateLowStockAlerts,
 } from '../lib/inventory';
+import { isCompletedOrder, buildReorderCartPlan } from '../lib/orderUtils';
+import { useCartStore } from '../store/cartStore';
+import {
+  initLocalDatabase,
+  shouldSeedLocalDemoData,
+  STALE_DEMO_STORAGE_KEYS,
+} from '../services/dataService';
 import { Profile, OrderItem, Product, AdminProduct, StaffPermissionsRecord, Category, Brand } from '../types';
 
 test('usernameToEmail formats username with portal internal domain', () => {
@@ -992,4 +1002,153 @@ test('safeStorage falls back cleanly to memory when window.localStorage throws S
       (globalThis as any).window = prevWindow;
     }
   }
+});
+
+test('isCompletedOrder and buildReorderCartPlan handle completed status, MOQ, missing/out-of-stock products, and name fallback', () => {
+  assert.equal(isCompletedOrder({ status: 'fulfilled' }), true);
+  assert.equal(isCompletedOrder({ status: 'new' }), false);
+  assert.equal(isCompletedOrder({ status: 'confirmed' }), false);
+  assert.equal(isCompletedOrder({ status: 'cancelled' }), false);
+
+  const now = new Date().toISOString();
+  const makeProd = (overrides: Partial<Product>): Product => ({
+    id: 'p-1',
+    category_id: 'c-1',
+    name: 'Panel 600W',
+    slug: 'panel-600w',
+    specs: {},
+    price: 165000,
+    min_order_qty: 1,
+    stock_status: 'in_stock',
+    images: [],
+    is_active: true,
+    is_featured: false,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  });
+
+  const liveProducts: Product[] = [
+    makeProd({ id: 'p-1', name: 'Panel 600W', price: 170000, min_order_qty: 4, stock_status: 'in_stock' }),
+    makeProd({ id: 'p-2-new', name: 'Deye 5kVA Inverter', price: 1300000, min_order_qty: 1, stock_status: 'low_stock' }),
+    makeProd({ id: 'p-3', name: 'Hidden Battery', is_active: false, stock_status: 'in_stock' }),
+    makeProd({ id: 'p-4', name: 'Sold Out MPPT', is_active: true, stock_status: 'out_of_stock' }),
+  ];
+
+  const plan = buildReorderCartPlan(
+    {
+      items: [
+        // Below current MOQ (2 < 4) -> bumped to 4
+        { product_id: 'p-1', name: 'Panel 600W', qty: 2, unit_price: 155000, line_total: 310000 },
+        // Old product ID changed, matched by name fallback
+        { product_id: 'old-deleted-id', name: 'deye 5kva inverter', qty: 2, unit_price: 1200000, line_total: 2400000 },
+        // Inactive -> skipped
+        { product_id: 'p-3', name: 'Hidden Battery', qty: 1, unit_price: 500000, line_total: 500000 },
+        // Out of stock -> skipped
+        { product_id: 'p-4', name: 'Sold Out MPPT', qty: 1, unit_price: 90000, line_total: 90000 },
+        // Duplicate same product in previous order -> merged
+        { product_id: 'p-2-new', name: 'Deye 5kVA Inverter', qty: 1, unit_price: 1200000, line_total: 1200000 },
+      ],
+    },
+    liveProducts
+  );
+
+  assert.equal(plan.itemsToCart.length, 2);
+  assert.equal(plan.itemsToCart[0].product.id, 'p-1');
+  assert.equal(plan.itemsToCart[0].product.price, 170000);
+  assert.equal(plan.itemsToCart[0].quantity, 4);
+  assert.equal(plan.itemsToCart[1].product.id, 'p-2-new');
+  assert.equal(plan.itemsToCart[1].quantity, 3);
+  assert.deepEqual(plan.adjustedMoqNames, ['Panel 600W']);
+  assert.equal(plan.skippedItems.length, 2);
+});
+
+test('useCartStore.replaceItems repopulates the cart cleanly replacing prior cart items', () => {
+  const now = new Date().toISOString();
+  const prodA: Product = {
+    id: 'prod-a',
+    category_id: 'cat-1',
+    name: 'Existing Cart Panel',
+    slug: 'existing-cart-panel',
+    specs: {},
+    price: 100000,
+    min_order_qty: 1,
+    stock_status: 'in_stock',
+    images: [],
+    is_active: true,
+    is_featured: false,
+    created_at: now,
+    updated_at: now,
+  };
+  const prodB: Product = {
+    ...prodA,
+    id: 'prod-b',
+    name: 'Reordered Inverter',
+    slug: 'reordered-inverter',
+    price: 950000,
+    min_order_qty: 2,
+  };
+
+  useCartStore.getState().clearCart();
+  useCartStore.getState().addItem(prodA, 3);
+  useCartStore.getState().setNote('Old cart note');
+  assert.equal(useCartStore.getState().items.length, 1);
+
+  useCartStore.getState().replaceItems([{ product: prodB, quantity: 1 }]);
+  const state = useCartStore.getState();
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0].product.id, 'prod-b');
+  assert.equal(state.items[0].quantity, 2); // enforced MOQ=2
+  assert.equal(state.note, '');
+  useCartStore.getState().clearCart();
+});
+
+test('shouldSeedLocalDemoData and initLocalDatabase suppress demo seeding and purge stale keys when Supabase is active', () => {
+  assert.equal(shouldSeedLocalDemoData(true), false);
+  assert.equal(shouldSeedLocalDemoData(false), true);
+
+  const prevWindow = (globalThis as any).window;
+  try {
+    (globalThis as any).window = {};
+    // Simulate legacy stale seed products & categories left behind in localStorage
+    safeStorage.setItem('ceo_power_portal_products', JSON.stringify([{ id: 'old-seed-1', name: 'Old Seed' }]));
+    safeStorage.setItem('ceo_power_portal_categories', JSON.stringify([{ id: 'old-cat-1', name: 'Old Cat' }]));
+    safeStorage.setItem('ceo_power_portal_brands', JSON.stringify([{ id: 'old-brand-1', name: 'Old Brand' }]));
+    safeStorage.setItem('ceo_power_portal_settings', JSON.stringify({ company_name: 'CEO Power Company' }));
+
+    initLocalDatabase(true);
+
+    for (const key of STALE_DEMO_STORAGE_KEYS) {
+      assert.equal(safeStorage.getItem(`ceo_power_portal_${key}`), null);
+    }
+    // Non-demo keys like settings must remain untouched
+    assert.ok(safeStorage.getItem('ceo_power_portal_settings'));
+
+    // Offline/demo mode still seeds when Supabase is inactive
+    initLocalDatabase(false);
+    assert.ok(safeStorage.getItem('ceo_power_portal_products'));
+    assert.ok(safeStorage.getItem('ceo_power_portal_categories'));
+  } finally {
+    for (const key of [...STALE_DEMO_STORAGE_KEYS, 'settings', 'staff_permissions', 'activity_log']) {
+      safeStorage.removeItem(`ceo_power_portal_${key}`);
+    }
+    if (prevWindow === undefined) {
+      delete (globalThis as any).window;
+    } else {
+      (globalThis as any).window = prevWindow;
+    }
+  }
+});
+
+test('WhatsApp container theme defaults to dark mode and normalizes/toggles safely', () => {
+  assert.equal(DEFAULT_WHATSAPP_THEME, 'dark');
+  assert.equal(normalizeWhatsAppTheme(undefined), 'dark');
+  assert.equal(normalizeWhatsAppTheme(null), 'dark');
+  assert.equal(normalizeWhatsAppTheme(''), 'dark');
+  assert.equal(normalizeWhatsAppTheme('midnight'), 'dark');
+  assert.equal(normalizeWhatsAppTheme('dark'), 'dark');
+  assert.equal(normalizeWhatsAppTheme('light'), 'light');
+
+  assert.equal(toggleWhatsAppTheme('dark'), 'light');
+  assert.equal(toggleWhatsAppTheme('light'), 'dark');
 });

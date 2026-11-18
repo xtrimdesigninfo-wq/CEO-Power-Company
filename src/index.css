@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --color-brand: #187004;
@@ -79,6 +80,20 @@ h1, h2, h3 {
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+.dark .wa-menu-scroll {
+  scrollbar-color: #2b3a32 #121614;
+}
+.dark .wa-menu-scroll::-webkit-scrollbar-track {
+  background: #121614;
+}
+.dark .wa-menu-scroll::-webkit-scrollbar-thumb {
+  background: #2b3a32;
+  border-radius: 3px;
+}
+.dark .wa-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3a4f44;
 }
 
 /* FloatingWhatsApp menu staggered card entrance & spring-physics button transitions */

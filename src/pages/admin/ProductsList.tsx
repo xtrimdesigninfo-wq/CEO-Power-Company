@@ -63,7 +63,13 @@ export default function ProductsList() {
     canEditStock ||
     canToggleVisibility;
 
-  const { data: products = [], isLoading: loadingProducts } = useQuery<AdminProduct[]>({
+  const {
+    data: products = [],
+    isLoading: loadingProducts,
+    isError: isProductsError,
+    error: productsError,
+    refetch: refetchProducts,
+  } = useQuery<AdminProduct[]>({
     queryKey: ['admin-products'],
     queryFn: () => dataService.getAdminProducts(),
     staleTime: 1000 * 60,
@@ -367,6 +373,7 @@ export default function ProductsList() {
       );
       setSelectedIds(prev => prev.filter(id => !deleteTargetIds.includes(id)));
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-products'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
         queryClient.invalidateQueries({ queryKey: ['catalog-products'] }),
       ]);
@@ -632,6 +639,19 @@ export default function ProductsList() {
             {[1, 2, 3, 4, 5].map(n => (
               <div key={n} className="h-14 bg-slate-100 rounded-xl animate-pulse" />
             ))}
+          </div>
+        ) : isProductsError && products.length === 0 ? (
+          <div className="p-12 text-center space-y-3">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-red-50 text-red-600">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <p className="text-sm font-bold text-slate-900">Failed to load products from the server</p>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              {(productsError as any)?.message || 'Please check your connection or session and try again.'}
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={() => refetchProducts()}>
+              Retry Loading Products
+            </Button>
           </div>
         ) : filteredProducts.length === 0 ? (
           <div className="p-12 text-center text-slate-500 text-sm">

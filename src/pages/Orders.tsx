@@ -1,66 +1,83 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronUp, ShoppingBag, RotateCcw, Calendar, FileText, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronDown, ChevronUp, ShoppingBag, RotateCcw, Calendar, FileText, ArrowRight, AlertTriangle } from 'lucide-react';
 import { OrderRequest } from '../types';
 import { dataService } from '../services/dataService';
 import { useAuthStore } from '../store/authStore';
 import { useCartStore } from '../store/cartStore';
 import { formatNaira, formatDate } from '../lib/utils';
+import { isCompletedOrder, buildReorderCartPlan } from '../lib/orderUtils';
 import { OrderBadge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 
 export default function Orders() {
+  const navigate = useNavigate();
   const { profile } = useAuthStore();
-  const { addItem } = useCartStore();
+  const { replaceItems } = useCartStore();
   const { success, error: toastError } = useToast();
 
   const [orders, setOrders] = useState<OrderRequest[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reorderingOrderId, setReorderingOrderId] = useState<string | null>(null);
+
+  const loadOrders = useCallback(async () => {
+    if (!profile) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const data = await dataService.getOrderRequests(profile.id);
+      setOrders(data);
+    } catch (err: any) {
+      console.error('Failed to load orders:', err);
+      setLoadError(err?.message || 'Unable to load order history right now.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [profile]);
 
   useEffect(() => {
-    async function loadOrders() {
-      if (!profile) return;
-      setIsLoading(true);
-      try {
-        const data = await dataService.getOrderRequests(profile.id);
-        setOrders(data);
-      } catch (err) {
-        console.error('Failed to load orders:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    }
     loadOrders();
-  }, [profile]);
+  }, [loadOrders]);
 
   const toggleExpand = (id: string) => {
     setExpandedId(prev => (prev === id ? null : id));
   };
 
   const handleReorder = async (order: OrderRequest) => {
+    if (reorderingOrderId) return;
+    setReorderingOrderId(order.id);
     try {
       const allProducts = await dataService.getProducts({ activeOnly: false });
-      const productMap = new Map(allProducts.map(p => [p.id, p]));
+      const plan = buildReorderCartPlan(order, allProducts);
 
-      let addedCount = 0;
-      for (const item of order.items) {
-        const currentProd = productMap.get(item.product_id);
-        if (currentProd && currentProd.is_active && currentProd.stock_status !== 'out_of_stock') {
-          addItem(currentProd, item.qty);
-          addedCount++;
-        }
-      }
-
-      if (addedCount > 0) {
-        success(`Added ${addedCount} items back to your cart at current wholesale prices!`);
-      } else {
+      if (plan.itemsToCart.length === 0) {
         toastError('Items from this order are no longer in stock or available.');
+        return;
       }
+
+      replaceItems(plan.itemsToCart);
+
+      const addedCount = plan.itemsToCart.length;
+      const parts = [
+        `Cart repopulated with ${addedCount} ${addedCount === 1 ? 'item' : 'items'} from ${order.ref} at current wholesale prices.`,
+      ];
+      if (plan.skippedItems.length > 0) {
+        parts.push(`${plan.skippedItems.length} unavailable/out-of-stock item(s) were skipped.`);
+      }
+      if (plan.adjustedMoqNames.length > 0) {
+        parts.push(`MOQ applied for ${plan.adjustedMoqNames.join(', ')}.`);
+      }
+
+      success(parts.join(' '));
+      navigate('/cart');
     } catch (err) {
       console.error('Failed to reorder:', err);
       toastError('Failed to reorder items. Please try again.');
+    } finally {
+      setReorderingOrderId(null);
     }
   };
 
@@ -92,7 +109,20 @@ export default function Orders() {
         </div>
       )}
 
-      {!isLoading && orders.length === 0 && (
+      {!isLoading && loadError && (
+        <div className="text-center py-14 bg-white rounded-2xl border border-red-200 p-8 space-y-3">
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-red-50 flex items-center justify-center text-red-600">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900 font-heading">Unable to load your orders</h3>
+          <p className="text-xs text-slate-500 max-w-sm mx-auto">{loadError}</p>
+          <Button type="button" variant="outline" size="sm" onClick={loadOrders}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {!isLoading && !loadError && orders.length === 0 && (
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 p-8">
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
             <FileText className="w-7 h-7" />
@@ -111,15 +141,19 @@ export default function Orders() {
         </div>
       )}
 
-      {!isLoading && orders.length > 0 && (
+      {!isLoading && !loadError && orders.length > 0 && (
         <div className="space-y-4">
           {orders.map(order => {
             const isExpanded = expandedId === order.id;
             const itemsCount = order.items.reduce((s, i) => s + i.qty, 0);
+            const completed = isCompletedOrder(order);
+            const isReorderingThis = reorderingOrderId === order.id;
 
             return (
               <div
                 key={order.id}
+                data-order-ref={order.ref}
+                data-order-status={order.status}
                 className="bg-white rounded-2xl border border-slate-200/80 hover:border-slate-300/90 shadow-xs overflow-hidden transition-all"
               >
                 {/* Header row */}
@@ -149,7 +183,7 @@ export default function Orders() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                  <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
                     <div className="text-left sm:text-right">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block">Total</span>
                       <span className="text-base sm:text-lg font-black text-[#187004] tabular-nums font-heading">
@@ -157,13 +191,34 @@ export default function Orders() {
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      aria-label={isExpanded ? 'Collapse order details' : 'Expand order details'}
-                      className="p-2 text-slate-400 hover:text-slate-600 rounded-lg"
-                    >
-                      {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {completed && (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          isLoading={isReorderingThis}
+                          disabled={reorderingOrderId !== null}
+                          onClick={e => {
+                            e.stopPropagation();
+                            handleReorder(order);
+                          }}
+                          aria-label={`Reorder items from ${order.ref}`}
+                          className="text-xs gap-1.5 font-bold shrink-0"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Reorder</span>
+                        </Button>
+                      )}
+
+                      <button
+                        type="button"
+                        aria-label={isExpanded ? 'Collapse order details' : 'Expand order details'}
+                        className="p-2 text-slate-400 hover:text-slate-600 rounded-lg"
+                      >
+                        {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -216,13 +271,15 @@ export default function Orders() {
                     <div className="flex justify-end pt-2">
                       <Button
                         type="button"
-                        variant="secondary"
+                        variant={completed ? 'primary' : 'secondary'}
                         size="md"
+                        isLoading={isReorderingThis}
+                        disabled={reorderingOrderId !== null}
                         onClick={() => handleReorder(order)}
-                        className="text-xs gap-1.5"
+                        className="text-xs gap-1.5 font-bold"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Reorder Items at Current Prices</span>
+                        <span>{completed ? 'Reorder' : 'Reorder Items at Current Prices'}</span>
                       </Button>
                     </div>
                   </div>

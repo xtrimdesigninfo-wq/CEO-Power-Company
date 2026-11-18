@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
   ArrowUp,
@@ -22,6 +23,7 @@ import { useToast } from '../../components/ui/Toast';
 import { usePermissions } from '../../context/PermissionsContext';
 
 export default function CategoriesList() {
+  const queryClient = useQueryClient();
   const { can, categoryScope } = usePermissions();
   const canCreateEdit = can('categories.create_edit');
   const canCreateNew = canCreateEdit && (!categoryScope || categoryScope.length === 0);
@@ -48,6 +50,15 @@ export default function CategoriesList() {
   const [deleteErrorMsg, setDeleteErrorMsg] = useState<string | null>(null);
 
   const { success, error: toastError } = useToast();
+
+  const invalidateCatalogueCaches = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['categories'] }),
+      queryClient.invalidateQueries({ queryKey: ['brands'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-products'] }),
+      queryClient.invalidateQueries({ queryKey: ['catalog-products'] }),
+    ]);
+  };
 
   const loadCategories = async () => {
     setIsLoading(true);
@@ -128,7 +139,7 @@ export default function CategoriesList() {
       }
 
       setIsDialogOpen(false);
-      await loadCategories();
+      await Promise.all([loadCategories(), invalidateCatalogueCaches()]);
     } catch (err: any) {
       toastError(err.message || 'Failed to save category.');
     } finally {
@@ -143,6 +154,7 @@ export default function CategoriesList() {
       setCategories(prev =>
         prev.map(c => (c.id === cat.id ? { ...c, is_active: !cat.is_active } : c))
       );
+      await invalidateCatalogueCaches();
       success(`Category ${!cat.is_active ? 'activated' : 'hidden'}.`);
     } catch (err: any) {
       toastError(err.message || 'Failed to update status.');
@@ -162,6 +174,7 @@ export default function CategoriesList() {
     try {
       setCategories(copy);
       await dataService.reorderCategories(copy.map(c => c.id));
+      await invalidateCatalogueCaches();
       success('Category order updated.');
     } catch (err: any) {
       toastError(err.message || 'Failed to reorder categories.');
@@ -182,6 +195,7 @@ export default function CategoriesList() {
       await dataService.deleteCategory(deleteTarget.id);
       setCategories(prev => prev.filter(c => c.id !== deleteTarget.id));
       setBrands(prev => prev.filter(b => b.category_id !== deleteTarget.id));
+      await invalidateCatalogueCaches();
       success(`Deleted "${deleteTarget.name}".`);
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
@@ -199,6 +213,7 @@ export default function CategoriesList() {
       const created = await dataService.createBrand({ category_id: categoryId, name });
       setBrands(prev => [...prev, created]);
       setNewBrandInputs(prev => ({ ...prev, [categoryId]: '' }));
+      await invalidateCatalogueCaches();
       success(`Added brand "${created.name}".`);
     } catch (err: any) {
       toastError(err?.message || 'Failed to add brand.');
@@ -212,6 +227,7 @@ export default function CategoriesList() {
     try {
       await dataService.deleteBrand(brand.id);
       setBrands(prev => prev.filter(b => b.id !== brand.id));
+      await invalidateCatalogueCaches();
       success(`Deleted brand "${brand.name}".`);
     } catch (err: any) {
       toastError(err?.message || 'Failed to delete brand.');

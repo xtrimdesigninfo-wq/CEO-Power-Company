@@ -8,6 +8,7 @@ interface CartState {
   note: string;
   setUserId: (userId: string | null) => void;
   addItem: (product: Product, quantity?: number) => void;
+  replaceItems: (items: CartItem[], note?: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   removeItem: (productId: string) => void;
   clearCart: () => void;
@@ -84,6 +85,20 @@ export const useCartStore = create<CartState>((set, get) => {
 
       saveCart(userId, updatedItems, note);
       set({ items: updatedItems });
+    },
+
+    replaceItems: (nextItems: CartItem[], note?: string) => {
+      const { userId } = get();
+      const normalized = nextItems
+        .filter(item => item?.product && item.product.id)
+        .map(item => {
+          const minQty = item.product.min_order_qty || 1;
+          const qty = Math.max(Math.floor(item.quantity || minQty), minQty);
+          return { product: item.product, quantity: qty };
+        });
+      const nextNote = note !== undefined ? note : '';
+      saveCart(userId, normalized, nextNote);
+      set({ items: normalized, note: nextNote });
     },
 
     updateQuantity: (productId: string, quantity: number) => {

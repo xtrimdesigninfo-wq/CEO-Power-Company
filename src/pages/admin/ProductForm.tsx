@@ -275,6 +275,7 @@ export default function ProductForm() {
       setValue('brand', created.name, { shouldValidate: true });
       setNewBrandName('');
       setShowAddBrand(false);
+      await queryClient.invalidateQueries({ queryKey: ['brands', 'all'] });
       success(`Brand "${created.name}" added.`);
     } catch (err: any) {
       toastError(err?.message || 'Failed to add brand.');
@@ -290,6 +291,7 @@ export default function ProductForm() {
       await dataService.deleteBrand(selectedBrandRecord.id);
       setBrands(prev => prev.filter(b => b.id !== selectedBrandRecord.id));
       setValue('brand', '');
+      await queryClient.invalidateQueries({ queryKey: ['brands', 'all'] });
       success(`Brand "${selectedBrandRecord.name}" deleted.`);
     } catch (err: any) {
       toastError(err?.message || 'Cannot delete brand.');
@@ -447,7 +449,13 @@ export default function ProductForm() {
         }
 
         await dataService.updateProduct(id, partialUpdates);
-        await queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['admin-products'] }),
+          queryClient.invalidateQueries({ queryKey: ['catalog-products'] }),
+          queryClient.invalidateQueries({ queryKey: ['product-by-slug'] }),
+          queryClient.invalidateQueries({ queryKey: ['brands', 'all'] }),
+          queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
+        ]);
         success('Product updated successfully.');
       } else {
         await dataService.createProduct({
@@ -455,7 +463,13 @@ export default function ProductForm() {
           images: combinedImages,
           specs,
         });
-        await queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['admin-products'] }),
+          queryClient.invalidateQueries({ queryKey: ['catalog-products'] }),
+          queryClient.invalidateQueries({ queryKey: ['product-by-slug'] }),
+          queryClient.invalidateQueries({ queryKey: ['brands', 'all'] }),
+          queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
+        ]);
         success('New product created successfully.');
       }
       navigate('/admin/products');

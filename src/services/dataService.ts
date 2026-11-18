@@ -38,9 +38,64 @@ import { normalizeWhatsAppNumber } from '../lib/whatsapp';
 import { slugify } from '../lib/utils';
 
 const STORAGE_KEY_PREFIX = 'ceo_power_portal_';
+export const STALE_DEMO_STORAGE_KEYS = [
+  'categories',
+  'brands',
+  'products',
+  'profiles',
+  'orders',
+  'passwords',
+] as const;
+
 let brandsTableMissing = false;
 let stockQuantityColumnMissing = false;
 let notificationsTableMissing = false;
+let activeRefreshPromise: Promise<void> | null = null;
+
+export function shouldSeedLocalDemoData(
+  supabaseActive = isSupabaseConfigured && Boolean(supabase)
+): boolean {
+  return !supabaseActive;
+}
+
+function isJwtExpiredError(error: any): boolean {
+  if (!error) return false;
+  const code = String(error.code || '').toUpperCase();
+  const status = Number(error.status || error.statusCode || 0);
+  const msg = String(error.message || '').toLowerCase();
+  return (
+    code === 'PGRST303' ||
+    status === 401 ||
+    msg.includes('jwt expired') ||
+    msg.includes('invalid jwt') ||
+    (msg.includes('jwt') && msg.includes('expired'))
+  );
+}
+
+async function refreshSupabaseSessionOnce(): Promise<void> {
+  if (!supabase) return;
+  if (!activeRefreshPromise) {
+    activeRefreshPromise = supabase.auth
+      .refreshSession()
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        activeRefreshPromise = null;
+      });
+  }
+  await activeRefreshPromise;
+}
+
+async function withJwtRefresh<T extends { data?: any; error?: any }>(
+  operation: () => PromiseLike<T>
+): Promise<T> {
+  const result = await operation();
+  if (result?.error && isJwtExpiredError(result.error) && supabase) {
+    await refreshSupabaseSessionOnce();
+    return await operation();
+  }
+  return result;
+}
 
 // Initial Seeds
 const SEED_SETTINGS: CompanySettings = {
@@ -660,10 +715,21 @@ function setLocalItem<T>(key: string, value: T): void {
   }
 }
 
-// Initialise storage if empty
-export function initLocalDatabase() {
+// Initialise local demo storage ONLY when running without Supabase.
+// When Supabase is active, purge any legacy seeded demo records from localStorage
+// so old deleted products/categories/brands can never resurrect on transient errors.
+export function initLocalDatabase(
+  supabaseActive = isSupabaseConfigured && Boolean(supabase)
+) {
   if (typeof window === 'undefined') return;
   try {
+    if (!shouldSeedLocalDemoData(supabaseActive)) {
+      for (const staleKey of STALE_DEMO_STORAGE_KEYS) {
+        safeStorage.removeItem(STORAGE_KEY_PREFIX + staleKey);
+      }
+      return;
+    }
+
     if (!safeStorage.getItem(STORAGE_KEY_PREFIX + 'categories')) {
       setLocalItem('categories', SEED_CATEGORIES);
     }
@@ -768,6 +834,21 @@ function setStockQuantityOverride(productId: string, quantity: number | null | u
   const map = getStockQuantityOverrides();
   map[productId] = Math.max(0, Math.floor(quantity));
   setLocalItem('stock_quantities', map);
+}
+
+function removeStockQuantityOverrides(productIds: string[]): void {
+  if (!productIds.length || typeof window === 'undefined') return;
+  const map = getStockQuantityOverrides();
+  let changed = false;
+  for (const pid of productIds) {
+    if (pid in map) {
+      delete map[pid];
+      changed = true;
+    }
+  }
+  if (changed) {
+    setLocalItem('stock_quantities', map);
+  }
 }
 
 function hydrateProductStockQuantity<T extends { id: string; stock_status: any; stock_quantity?: number | null }>(
@@ -881,12 +962,15 @@ export const dataService = {
   async getCategories(onlyActive = true): Promise<Category[]> {
     return dedupeInFlight(`categories:${onlyActive}`, async () => {
       if (isSupabaseConfigured && supabase) {
-        let query = supabase.from('categories').select('*').order('sort_order', { ascending: true });
-        if (onlyActive) {
-          query = query.eq('is_active', true);
-        }
-        const { data, error } = await query;
-        if (!error && data) return data as Category[];
+        const { data, error } = await withJwtRefresh(() => {
+          let query = supabase!.from('categories').select('*').order('sort_order', { ascending: true });
+          if (onlyActive) {
+            query = query.eq('is_active', true);
+          }
+          return query;
+        });
+        if (error) throw new Error(error.message);
+        return (data || []) as Category[];
       }
       const { actor, staffPerms } = getLocalActorContext();
       let categories = getLocalItem<Category[]>('categories', SEED_CATEGORIES);
@@ -900,8 +984,11 @@ export const dataService = {
 
   async getCategoryBySlug(slug: string): Promise<Category | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('categories').select('*').eq('slug', slug).maybeSingle();
-      if (!error && data) return data as Category;
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('categories').select('*').eq('slug', slug).maybeSingle()
+      );
+      if (error) throw new Error(error.message);
+      return (data as Category) || null;
     }
     const categories = getLocalItem<Category[]>('categories', SEED_CATEGORIES);
     return categories.find(c => c.slug === slug) || null;
@@ -915,9 +1002,11 @@ export const dataService = {
     };
 
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('categories').insert(newCategory).select().single();
-      if (!error && data) return data as Category;
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('categories').insert(newCategory).select().single()
+      );
       if (error) throw new Error(error.message);
+      return data as Category;
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -939,9 +1028,11 @@ export const dataService = {
 
   async updateCategory(id: string, updates: Partial<Category>): Promise<Category> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('categories').update(updates).eq('id', id).select().single();
-      if (!error && data) return data as Category;
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('categories').update(updates).eq('id', id).select().single()
+      );
       if (error) throw new Error(error.message);
+      return data as Category;
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -980,7 +1071,9 @@ export const dataService = {
   async reorderCategories(orderedIds: string[]): Promise<void> {
     if (isSupabaseConfigured && supabase) {
       for (let i = 0; i < orderedIds.length; i++) {
-        const { error } = await supabase.from('categories').update({ sort_order: i + 1 }).eq('id', orderedIds[i]);
+        const { error } = await withJwtRefresh(() =>
+          supabase!.from('categories').update({ sort_order: i + 1 }).eq('id', orderedIds[i])
+        );
         if (error) throw new Error(error.message);
       }
       return;
@@ -1008,7 +1101,9 @@ export const dataService = {
     }
 
     if (isSupabaseConfigured && supabase) {
-      const { error } = await supabase.from('categories').delete().eq('id', id);
+      const { error } = await withJwtRefresh(() =>
+        supabase!.from('categories').delete().eq('id', id).select('id')
+      );
       if (error) throw new Error(error.message);
       return;
     }
@@ -1030,64 +1125,80 @@ export const dataService = {
 
   // BRANDS (Product Sub-Categories under a Parent Category)
   async getBrands(categoryId?: string): Promise<Brand[]> {
-    let brands: Brand[] | null = null;
+    let brands: Brand[] = [];
 
-    if (isSupabaseConfigured && supabase && !brandsTableMissing) {
-      let query = supabase
-        .from('brands')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('name', { ascending: true });
-      if (categoryId) {
-        query = query.eq('category_id', categoryId);
-      }
-      const { data, error } = await query;
-      if (!error && data) {
-        brands = data as Brand[];
-      } else {
-        const msg = error?.message?.toLowerCase() || '';
-        const code = (error as any)?.code || '';
-        if (code === 'PGRST205' || code === '42P01' || (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')))) {
+    if (isSupabaseConfigured && supabase) {
+      if (!brandsTableMissing) {
+        const { data, error } = await withJwtRefresh(() => {
+          let query = supabase!
+            .from('brands')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('name', { ascending: true });
+          if (categoryId) {
+            query = query.eq('category_id', categoryId);
+          }
+          return query;
+        });
+        if (!error && data) {
+          brands = data as Brand[];
+        } else if (error) {
+          const msg = error.message?.toLowerCase() || '';
+          const code = (error as any).code || '';
+          const isMissingTable =
+            code === 'PGRST205' ||
+            code === '42P01' ||
+            (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')));
+          if (!isMissingTable) {
+            throw new Error(error.message);
+          }
           brandsTableMissing = true;
         }
-        // Fallback when brands table hasn't been created yet on Supabase: merge local brands + existing products' brands
-        const localBrands = getLocalItem<Brand[]>('brands', SEED_BRANDS);
-        const merged = [...localBrands];
-        const { data: prodRows } = await supabase
-          .from('products')
-          .select('category_id, brand');
-        if (prodRows) {
-          for (const row of prodRows as Array<{ category_id: string; brand: string | null }>) {
-            const name = row.brand?.trim();
-            if (!name || !row.category_id) continue;
-            const slug = slugify(name);
-            if (!merged.some(b => b.category_id === row.category_id && (b.slug === slug || b.name.toLowerCase() === name.toLowerCase()))) {
-              merged.push({
-                id: `derived-${row.category_id}-${slug}`,
-                category_id: row.category_id,
-                name,
-                slug,
-                sort_order: merged.length + 1,
-              });
-            }
-          }
-          setLocalItem('brands', merged);
-        }
-        brands = merged;
       }
-    } else if (isSupabaseConfigured && supabase && brandsTableMissing) {
-      brands = getLocalItem<Brand[]>('brands', SEED_BRANDS);
+
+      if (brandsTableMissing) {
+        // Derive ONLY from live Supabase products (never fall back to SEED_BRANDS)
+        const { data: prodRows, error: prodErr } = await withJwtRefresh(() => {
+          let q = supabase!.from('products').select('category_id, brand');
+          if (categoryId) {
+            q = q.eq('category_id', categoryId);
+          }
+          return q;
+        });
+        if (prodErr) throw new Error(prodErr.message);
+        const derived: Brand[] = [];
+        for (const row of (prodRows || []) as Array<{ category_id: string; brand: string | null }>) {
+          const name = row.brand?.trim();
+          if (!name || !row.category_id) continue;
+          const slug = slugify(name);
+          if (!derived.some(b => b.category_id === row.category_id && (b.slug === slug || b.name.toLowerCase() === name.toLowerCase()))) {
+            derived.push({
+              id: `derived-${row.category_id}-${slug}`,
+              category_id: row.category_id,
+              name,
+              slug,
+              sort_order: derived.length + 1,
+            });
+          }
+        }
+        brands = derived;
+      }
+
+      const { actor, staffPerms } = getLocalActorContext();
+      if (actor?.role === 'staff') {
+        brands = brands.filter(b => canAccessCategoryScope(actor, staffPerms, b.category_id));
+      }
+      if (categoryId) {
+        brands = brands.filter(b => b.category_id === categoryId);
+      }
+      return [...brands].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
     }
 
-    if (!brands) {
-      brands = getLocalItem<Brand[]>('brands', SEED_BRANDS);
-    }
-
+    brands = getLocalItem<Brand[]>('brands', SEED_BRANDS);
     const { actor, staffPerms } = getLocalActorContext();
     if (actor?.role === 'staff') {
       brands = brands.filter(b => canAccessCategoryScope(actor, staffPerms, b.category_id));
     }
-
     if (categoryId) {
       brands = brands.filter(b => b.category_id === categoryId);
     }
@@ -1122,21 +1233,27 @@ export const dataService = {
       created_at: new Date().toISOString(),
     };
 
-    if (isSupabaseConfigured && supabase && !brandsTableMissing) {
-      const { data, error } = await supabase.from('brands').insert(newBrand).select().single();
+    if (isSupabaseConfigured && supabase) {
+      if (brandsTableMissing) {
+        return newBrand;
+      }
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('brands').insert(newBrand).select().single()
+      );
       if (!error && data) {
-        const local = getLocalItem<Brand[]>('brands', SEED_BRANDS);
-        setLocalItem('brands', [...local, data as Brand]);
         return data as Brand;
       }
       const msg = error?.message?.toLowerCase() || '';
       const code = (error as any)?.code || '';
-      const isMissingTable = code === 'PGRST205' || code === '42P01' || (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')));
+      const isMissingTable =
+        code === 'PGRST205' ||
+        code === '42P01' ||
+        (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')));
       if (isMissingTable) {
         brandsTableMissing = true;
-      } else if (error) {
-        throw new Error(error.message);
+        return newBrand;
       }
+      throw new Error(error?.message || 'Failed to create brand.');
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -1179,21 +1296,27 @@ export const dataService = {
       );
     }
 
-    if (isSupabaseConfigured && supabase && !brandsTableMissing && !id.startsWith('derived-')) {
-      const { error } = await supabase.from('brands').delete().eq('id', id);
-      if (!error) {
-        const local = getLocalItem<Brand[]>('brands', SEED_BRANDS).filter(b => b.id !== id);
-        setLocalItem('brands', local);
+    if (isSupabaseConfigured && supabase) {
+      if (brandsTableMissing || id.startsWith('derived-')) {
         return;
       }
-      const msg = error?.message?.toLowerCase() || '';
-      const code = (error as any)?.code || '';
-      const isMissingTable = code === 'PGRST205' || code === '42P01' || (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')));
-      if (isMissingTable) {
-        brandsTableMissing = true;
-      } else if (error) {
+      const { error } = await withJwtRefresh(() =>
+        supabase!.from('brands').delete().eq('id', id).select('id')
+      );
+      if (error) {
+        const msg = error.message?.toLowerCase() || '';
+        const code = (error as any).code || '';
+        const isMissingTable =
+          code === 'PGRST205' ||
+          code === '42P01' ||
+          (msg.includes('brands') && (msg.includes('could not find') || msg.includes('does not exist')));
+        if (isMissingTable) {
+          brandsTableMissing = true;
+          return;
+        }
         throw new Error(error.message);
       }
+      return;
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -1225,19 +1348,20 @@ export const dataService = {
     let products: Product[] = [];
 
     if (isSupabaseConfigured && supabase) {
-      let query = supabase.from('products').select('*');
-      if (params?.activeOnly ?? true) {
-        query = query.eq('is_active', true);
+      const { data, error } = await withJwtRefresh(() => {
+        let query = supabase!.from('products').select('*');
+        if (params?.activeOnly ?? true) {
+          query = query.eq('is_active', true);
+        }
+        if (params?.categoryId) {
+          query = query.eq('category_id', params.categoryId);
+        }
+        return query;
+      });
+      if (error) {
+        throw new Error(error.message || 'Failed to load products from the database.');
       }
-      if (params?.categoryId) {
-        query = query.eq('category_id', params.categoryId);
-      }
-      const { data, error } = await query;
-      if (!error && data) {
-        products = (data as Product[]).map(r => hydrateProductStockQuantity(r));
-      } else {
-        products = getLocalItem<Product[]>('products', SEED_PRODUCTS).map(r => hydrateProductStockQuantity(r, true));
-      }
+      products = ((data || []) as Product[]).map(r => hydrateProductStockQuantity(r));
     } else {
       products = getLocalItem<Product[]>('products', SEED_PRODUCTS).map(r => hydrateProductStockQuantity(r, true));
     }
@@ -1295,7 +1419,7 @@ export const dataService = {
         [...list].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       if (isSupabaseConfigured && supabase) {
-        const { data, error } = await supabase.rpc('admin_list_products');
+        const { data, error } = await withJwtRefresh(() => supabase!.rpc('admin_list_products'));
         if (!error && data) {
           return sortNewestFirst(
             (data as any[]).map(row =>
@@ -1312,15 +1436,18 @@ export const dataService = {
         const isMissingRpc = msg.includes('admin_list_products') && (msg.includes('could not find') || msg.includes('does not exist'));
         const { actor } = getLocalActorContext();
         if (isMissingRpc && actor?.role === 'admin') {
-          const { data: rows, error: directErr } = await supabase
-            .from('products')
-            .select('*')
-            .order('created_at', { ascending: false });
+          const { data: rows, error: directErr } = await withJwtRefresh(() =>
+            supabase!
+              .from('products')
+              .select('*')
+              .order('created_at', { ascending: false })
+          );
           if (!directErr && rows) {
             return sortNewestFirst((rows as AdminProduct[]).map(r => hydrateProductStockQuantity(r)));
           }
+          if (directErr) throw new Error(directErr.message);
         }
-        if (error) throw new Error(error.message);
+        throw new Error(error?.message || 'Failed to load admin products.');
       }
 
       const { actor, staffPerms } = getLocalActorContext();
@@ -1341,7 +1468,9 @@ export const dataService = {
 
   async getAdminProductById(id: string): Promise<AdminProduct | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.rpc('admin_get_product', { p_id: id });
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.rpc('admin_get_product', { p_id: id })
+      );
       if (!error && Array.isArray(data)) {
         const row = data[0];
         if (!row) return null;
@@ -1355,10 +1484,13 @@ export const dataService = {
       const isMissingRpc = msg.includes('admin_get_product') && (msg.includes('could not find') || msg.includes('does not exist'));
       const { actor } = getLocalActorContext();
       if (isMissingRpc && actor?.role === 'admin') {
-        const { data: row, error: directErr } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
-        if (!directErr && row) return hydrateProductStockQuantity(row as AdminProduct);
+        const { data: row, error: directErr } = await withJwtRefresh(() =>
+          supabase!.from('products').select('*').eq('id', id).maybeSingle()
+        );
+        if (directErr) throw new Error(directErr.message);
+        return row ? hydrateProductStockQuantity(row as AdminProduct) : null;
       }
-      if (error) throw new Error(error.message);
+      throw new Error(error?.message || 'Failed to load product.');
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -1377,8 +1509,11 @@ export const dataService = {
 
   async getProductBySlug(slug: string): Promise<Product | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('products').select('*').eq('slug', slug).maybeSingle();
-      if (!error && data) return hydrateProductStockQuantity(data as Product);
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('products').select('*').eq('slug', slug).maybeSingle()
+      );
+      if (error) throw new Error(error.message);
+      return data ? hydrateProductStockQuantity(data as Product) : null;
     }
     const products = getLocalItem<Product[]>('products', SEED_PRODUCTS).map(r =>
       hydrateProductStockQuantity(r, true)
@@ -1388,8 +1523,11 @@ export const dataService = {
 
   async getProductById(id: string): Promise<Product | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
-      if (!error && data) return hydrateProductStockQuantity(data as Product);
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('products').select('*').eq('id', id).maybeSingle()
+      );
+      if (error) throw new Error(error.message);
+      return data ? hydrateProductStockQuantity(data as Product) : null;
     }
     const products = getLocalItem<Product[]>('products', SEED_PRODUCTS).map(r =>
       hydrateProductStockQuantity(r, true)
@@ -1422,18 +1560,22 @@ export const dataService = {
       if (stockQuantityColumnMissing) {
         const { stock_quantity: _omit, ...withoutStockQty } = newProduct;
         if (isInitialLowOrOut) {
-          const { data: baseCreated, error: baseErr } = await supabase
-            .from('products')
-            .insert({ ...withoutStockQty, stock_status: 'in_stock' })
-            .select()
-            .single();
+          const { data: baseCreated, error: baseErr } = await withJwtRefresh(() =>
+            supabase!
+              .from('products')
+              .insert({ ...withoutStockQty, stock_status: 'in_stock' })
+              .select()
+              .single()
+          );
           if (baseErr) throw new Error(baseErr.message);
-          const { data: syncedRow, error: syncErr } = await supabase
-            .from('products')
-            .update({ stock_status: newProduct.stock_status })
-            .eq('id', (baseCreated as Product).id)
-            .select()
-            .single();
+          const { data: syncedRow, error: syncErr } = await withJwtRefresh(() =>
+            supabase!
+              .from('products')
+              .update({ stock_status: newProduct.stock_status })
+              .eq('id', (baseCreated as Product).id)
+              .select()
+              .single()
+          );
           if (!syncErr && syncedRow) return hydrateProductStockQuantity(syncedRow as Product);
           return hydrateProductStockQuantity({
             ...(baseCreated as Product),
@@ -1441,13 +1583,18 @@ export const dataService = {
             stock_quantity: newProduct.stock_quantity,
           });
         }
-        const { data: created, error } = await supabase.from('products').insert(withoutStockQty).select().single();
-        if (!error && created) return hydrateProductStockQuantity(created as Product);
+        const { data: created, error } = await withJwtRefresh(() =>
+          supabase!.from('products').insert(withoutStockQty).select().single()
+        );
         if (error) throw new Error(error.message);
-      } else {
-        if (isInitialLowOrOut) {
-          const seedSafeQty = Math.max(25, activeThreshold + 10);
-          const { data: baseCreated, error: baseErr } = await supabase
+        if (!created) throw new Error('Product creation returned no data.');
+        return hydrateProductStockQuantity(created as Product);
+      }
+
+      if (isInitialLowOrOut) {
+        const seedSafeQty = Math.max(25, activeThreshold + 10);
+        const { data: baseCreated, error: baseErr } = await withJwtRefresh(() =>
+          supabase!
             .from('products')
             .insert({
               ...newProduct,
@@ -1455,9 +1602,11 @@ export const dataService = {
               stock_quantity: seedSafeQty,
             })
             .select()
-            .single();
-          if (!baseErr && baseCreated) {
-            const { data: syncedRow, error: syncErr } = await supabase
+            .single()
+        );
+        if (!baseErr && baseCreated) {
+          const { data: syncedRow, error: syncErr } = await withJwtRefresh(() =>
+            supabase!
               .from('products')
               .update({
                 stock_quantity: newProduct.stock_quantity,
@@ -1465,76 +1614,8 @@ export const dataService = {
               })
               .eq('id', (baseCreated as Product).id)
               .select()
-              .single();
-            if (!syncErr && syncedRow) return hydrateProductStockQuantity(syncedRow as Product);
-            return hydrateProductStockQuantity({
-              ...(baseCreated as Product),
-              stock_quantity: newProduct.stock_quantity,
-              stock_status: newProduct.stock_status,
-            });
-          }
-          if (baseErr && isMissingStockColumnError(baseErr)) {
-            stockQuantityColumnMissing = true;
-            const { stock_quantity: _omit, ...withoutStockQty } = newProduct;
-            const { data: retryBase, error: retryBaseErr } = await supabase
-              .from('products')
-              .insert({ ...withoutStockQty, stock_status: 'in_stock' })
-              .select()
-              .single();
-            if (retryBaseErr) throw new Error(retryBaseErr.message);
-            const { data: syncedRetry } = await supabase
-              .from('products')
-              .update({ stock_status: newProduct.stock_status })
-              .eq('id', (retryBase as Product).id)
-              .select()
-              .single();
-            return hydrateProductStockQuantity((syncedRetry || {
-              ...(retryBase as Product),
-              stock_status: newProduct.stock_status,
-              stock_quantity: newProduct.stock_quantity,
-            }) as Product);
-          }
-          if (baseErr) throw new Error(baseErr.message);
-        }
-
-        const { data: created, error } = await supabase.from('products').insert(newProduct).select().single();
-        if (!error && created) return hydrateProductStockQuantity(created as Product);
-        if (error && isMissingStockColumnError(error)) {
-          stockQuantityColumnMissing = true;
-          const { stock_quantity: _omit, ...withoutStockQty } = newProduct;
-          const { data: retryCreated, error: retryErr } = await supabase
-            .from('products')
-            .insert(withoutStockQty)
-            .select()
-            .single();
-          if (!retryErr && retryCreated) return hydrateProductStockQuantity(retryCreated as Product);
-          if (retryErr) throw new Error(retryErr.message);
-        }
-        // Fallback if Supabase's BEFORE INSERT trigger fires admin_notifications FK violation for low-stock creates
-        if (
-          error &&
-          (error.code === '23503' || error.message?.includes('admin_notifications_product_id_fkey'))
-        ) {
-          const seedSafeQty = Math.max(100, (newProduct.stock_quantity ?? 0) + 100);
-          const { data: baseCreated, error: baseErr } = await supabase
-            .from('products')
-            .insert({
-              ...newProduct,
-              stock_status: 'in_stock',
-              stock_quantity: seedSafeQty,
-            })
-            .select()
-            .single();
-          if (baseErr) throw new Error(baseErr.message);
-          const { data: syncedRow, error: syncErr } = await supabase
-            .from('products')
-            .update({
-              stock_quantity: newProduct.stock_quantity,
-              stock_status: newProduct.stock_status,
-            })
-            .eq('id', (baseCreated as Product).id)
-            .select()
-            .single();
+              .single()
+          );
           if (!syncErr && syncedRow) return hydrateProductStockQuantity(syncedRow as Product);
           return hydrateProductStockQuantity({
             ...(baseCreated as Product),
@@ -1542,8 +1623,89 @@ export const dataService = {
             stock_status: newProduct.stock_status,
           });
         }
-        if (error) throw new Error(error.message);
+        if (baseErr && isMissingStockColumnError(baseErr)) {
+          stockQuantityColumnMissing = true;
+          const { stock_quantity: _omit, ...withoutStockQty } = newProduct;
+          const { data: retryBase, error: retryBaseErr } = await withJwtRefresh(() =>
+            supabase!
+              .from('products')
+              .insert({ ...withoutStockQty, stock_status: 'in_stock' })
+              .select()
+              .single()
+          );
+          if (retryBaseErr) throw new Error(retryBaseErr.message);
+          const { data: syncedRetry } = await withJwtRefresh(() =>
+            supabase!
+              .from('products')
+              .update({ stock_status: newProduct.stock_status })
+              .eq('id', (retryBase as Product).id)
+              .select()
+              .single()
+          );
+          return hydrateProductStockQuantity((syncedRetry || {
+            ...(retryBase as Product),
+            stock_status: newProduct.stock_status,
+            stock_quantity: newProduct.stock_quantity,
+          }) as Product);
+        }
+        if (baseErr) throw new Error(baseErr.message);
       }
+
+      const { data: created, error } = await withJwtRefresh(() =>
+        supabase!.from('products').insert(newProduct).select().single()
+      );
+      if (!error && created) return hydrateProductStockQuantity(created as Product);
+      if (error && isMissingStockColumnError(error)) {
+        stockQuantityColumnMissing = true;
+        const { stock_quantity: _omit, ...withoutStockQty } = newProduct;
+        const { data: retryCreated, error: retryErr } = await withJwtRefresh(() =>
+          supabase!
+            .from('products')
+            .insert(withoutStockQty)
+            .select()
+            .single()
+        );
+        if (retryErr) throw new Error(retryErr.message);
+        if (!retryCreated) throw new Error('Product creation returned no data.');
+        return hydrateProductStockQuantity(retryCreated as Product);
+      }
+      // Fallback if Supabase's BEFORE INSERT trigger fires admin_notifications FK violation for low-stock creates
+      if (
+        error &&
+        (error.code === '23503' || error.message?.includes('admin_notifications_product_id_fkey'))
+      ) {
+        const seedSafeQty = Math.max(100, (newProduct.stock_quantity ?? 0) + 100);
+        const { data: baseCreated, error: baseErr } = await withJwtRefresh(() =>
+          supabase!
+            .from('products')
+            .insert({
+              ...newProduct,
+              stock_status: 'in_stock',
+              stock_quantity: seedSafeQty,
+            })
+            .select()
+            .single()
+        );
+        if (baseErr) throw new Error(baseErr.message);
+        const { data: syncedRow, error: syncErr } = await withJwtRefresh(() =>
+          supabase!
+            .from('products')
+            .update({
+              stock_quantity: newProduct.stock_quantity,
+              stock_status: newProduct.stock_status,
+            })
+            .eq('id', (baseCreated as Product).id)
+            .select()
+            .single()
+        );
+        if (!syncErr && syncedRow) return hydrateProductStockQuantity(syncedRow as Product);
+        return hydrateProductStockQuantity({
+          ...(baseCreated as Product),
+          stock_quantity: newProduct.stock_quantity,
+          stock_status: newProduct.stock_status,
+        });
+      }
+      throw new Error(error?.message || 'Failed to save product.');
     }
 
     const { actor, staffPerms } = getLocalActorContext();
@@ -1579,21 +1741,37 @@ export const dataService = {
     }
 
     if (isSupabaseConfigured && supabase) {
+      let updatedRows: Array<{ id: string }> | null = null;
       if (stockQuantityColumnMissing) {
         const { stock_quantity: _omit, ...withoutStockQty } = payload;
-        const { error } = await supabase.from('products').update(withoutStockQty).eq('id', id);
+        const { data, error } = await withJwtRefresh(() =>
+          supabase!.from('products').update(withoutStockQty).eq('id', id).select('id')
+        );
         if (error) throw new Error(error.message);
+        updatedRows = data as Array<{ id: string }> | null;
       } else {
-        const { error } = await supabase.from('products').update(payload).eq('id', id);
+        const { data, error } = await withJwtRefresh(() =>
+          supabase!.from('products').update(payload).eq('id', id).select('id')
+        );
         if (error && isMissingStockColumnError(error)) {
           stockQuantityColumnMissing = true;
           const { stock_quantity: _omit, ...withoutStockQty } = payload;
-          const { error: retryErr } = await supabase.from('products').update(withoutStockQty).eq('id', id);
+          const { data: retryData, error: retryErr } = await withJwtRefresh(() =>
+            supabase!.from('products').update(withoutStockQty).eq('id', id).select('id')
+          );
           if (retryErr) throw new Error(retryErr.message);
+          updatedRows = retryData as Array<{ id: string }> | null;
         } else if (error) {
           throw new Error(error.message);
+        } else {
+          updatedRows = data as Array<{ id: string }> | null;
         }
       }
+
+      if (!updatedRows || updatedRows.length === 0) {
+        throw new Error('Product update did not persist (product not found or insufficient permissions).');
+      }
+
       // Re-fetch through admin_get_product so staff without view_prices never receive unredacted price
       const refreshed = await this.getAdminProductById(id);
       if (refreshed) return hydrateProductStockQuantity(refreshed);
@@ -1634,8 +1812,21 @@ export const dataService = {
 
   async deleteProduct(id: string): Promise<void> {
     if (isSupabaseConfigured && supabase) {
-      const { error } = await supabase.from('products').delete().eq('id', id);
+      const { data: deletedRows, error } = await withJwtRefresh(() =>
+        supabase!.from('products').delete().eq('id', id).select('id')
+      );
       if (error) throw new Error(error.message);
+      if (!deletedRows || deletedRows.length === 0) {
+        const { data: stillExists } = await supabase
+          .from('products')
+          .select('id')
+          .eq('id', id)
+          .maybeSingle();
+        if (stillExists) {
+          throw new Error('Could not delete product: permission denied or restricted.');
+        }
+      }
+      removeStockQuantityOverrides([id]);
       return;
     }
 
@@ -1650,6 +1841,7 @@ export const dataService = {
 
     const updated = products.filter(p => p.id !== id);
     setLocalItem('products', updated);
+    removeStockQuantityOverrides([id]);
     appendLocalActivityLog(actor, 'product.delete', 'products', id, {
       name: target.name,
       before: { price: target.price, stock_status: target.stock_status },
@@ -1658,7 +1850,9 @@ export const dataService = {
 
   async bulkUpdateProducts(ids: string[], updates: Partial<Product>): Promise<void> {
     if (isSupabaseConfigured && supabase) {
-      const { error } = await supabase.from('products').update(updates).in('id', ids);
+      const { error } = await withJwtRefresh(() =>
+        supabase!.from('products').update(updates).in('id', ids)
+      );
       if (error) throw new Error(error.message);
       return;
     }
@@ -1686,8 +1880,23 @@ export const dataService = {
 
   async bulkDeleteProducts(ids: string[]): Promise<void> {
     if (isSupabaseConfigured && supabase) {
-      const { error } = await supabase.from('products').delete().in('id', ids);
+      const { data: deletedRows, error } = await withJwtRefresh(() =>
+        supabase!.from('products').delete().in('id', ids).select('id')
+      );
       if (error) throw new Error(error.message);
+      const deletedCount = deletedRows ? deletedRows.length : 0;
+      if (deletedCount < ids.length) {
+        const { data: remaining } = await supabase
+          .from('products')
+          .select('id')
+          .in('id', ids);
+        if (remaining && remaining.length > 0) {
+          throw new Error(
+            `${remaining.length} selected product(s) could not be deleted (permission denied or restricted).`
+          );
+        }
+      }
+      removeStockQuantityOverrides(ids);
       return;
     }
 
@@ -1706,6 +1915,7 @@ export const dataService = {
 
     const updated = products.filter(p => !ids.includes(p.id));
     setLocalItem('products', updated);
+    removeStockQuantityOverrides(ids);
     appendLocalActivityLog(actor, 'product.bulk_delete', 'products', null, { count: ids.length });
   },
 

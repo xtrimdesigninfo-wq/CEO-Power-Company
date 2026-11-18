@@ -417,5 +417,26 @@ export function getFabSpringState(isOpen: boolean, hasInteracted: boolean): FabS
   return isOpen ? 'opening' : 'closing';
 }
 
+export type WhatsAppContainerTheme = 'dark' | 'light';
+
+export const DEFAULT_WHATSAPP_THEME: WhatsAppContainerTheme = 'dark';
+export const WHATSAPP_THEME_STORAGE_KEY = 'ceo_power_whatsapp_theme';
+
+/**
+ * Normalizes persisted or raw theme values to a valid WhatsAppContainerTheme,
+ * defaulting to deep emerald & charcoal dark mode.
+ */
+export function normalizeWhatsAppTheme(raw: unknown): WhatsAppContainerTheme {
+  if (raw === 'light' || raw === 'dark') return raw;
+  return DEFAULT_WHATSAPP_THEME;
+}
+
+/**
+ * Toggles between dark and light themes for the FloatingWhatsApp container.
+ */
+export function toggleWhatsAppTheme(current: WhatsAppContainerTheme): WhatsAppContainerTheme {
+  return current === 'dark' ? 'light' : 'dark';
+}
+
 
 

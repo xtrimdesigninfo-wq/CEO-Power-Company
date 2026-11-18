@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Sparkles, Filter, X, ShieldCheck } from 'lucide-react';
+import { Search, Sparkles, Filter, X, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { Product, Category, Brand } from '../types';
 import { dataService } from '../services/dataService';
 import { useAuthStore } from '../store/authStore';
@@ -36,7 +36,12 @@ export default function Catalog() {
     staleTime: 1000 * 60 * 5,
   });
 
-  const { data: allActiveProducts = [], isLoading: loadingProducts } = useQuery<Product[]>({
+  const {
+    data: allActiveProducts = [],
+    isLoading: loadingProducts,
+    isError: isProductsError,
+    refetch: refetchProducts,
+  } = useQuery<Product[]>({
     queryKey: ['catalog-products'],
     queryFn: () => dataService.getProducts({ activeOnly: true }),
     staleTime: 1000 * 60 * 2,
@@ -299,8 +304,30 @@ export default function Catalog() {
           </div>
         )}
 
+        {/* Error State */}
+        {!isLoading && isProductsError && allActiveProducts.length === 0 && (
+          <div className="text-center py-16 bg-white rounded-2xl border border-red-200 p-8">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-red-50 flex items-center justify-center text-red-600">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 font-heading">
+              Unable to load products right now
+            </h3>
+            <p className="text-sm text-slate-500 max-w-sm mx-auto mt-1">
+              We had trouble reaching the live product catalogue. Please retry to fetch the latest items.
+            </p>
+            <button
+              type="button"
+              onClick={() => refetchProducts()}
+              className="mt-4 px-4 py-2 rounded-xl bg-[#187004] text-white text-xs font-bold hover:bg-[#0e3e03] cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Empty State */}
-        {!isLoading && products.length === 0 && (
+        {!isLoading && !(isProductsError && allActiveProducts.length === 0) && products.length === 0 && (
           <div className="text-center py-16 bg-white rounded-2xl border border-slate-200/80 p-8">
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
               <Search className="w-7 h-7" />
