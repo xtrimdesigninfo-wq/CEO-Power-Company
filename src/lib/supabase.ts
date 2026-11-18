@@ -3,26 +3,77 @@ import { safeStorage } from './storage';
 
 export const PORTAL_EMAIL_DOMAIN = 'portal.ceopower.local';
 
-const env = (typeof import.meta !== 'undefined' && import.meta.env) 
-  ? import.meta.env 
-  : ((typeof process !== 'undefined' ? process.env : {}) as any);
+export const DEFAULT_PUBLIC_SUPABASE_URL = 'https://vhdsfrnatyfrtlekuzlk.supabase.co';
+export const DEFAULT_PUBLIC_SUPABASE_ANON_KEY = 'sb_publishable_sKS4JX_svfmj177x9ck3nQ_TifH14Bl';
 
-const rawSupabaseUrl = (env.VITE_SUPABASE_URL || '').trim();
-const supabaseUrl = rawSupabaseUrl
-  .replace(/\/rest\/v1\/?$/i, '')
-  .replace(/\/+$/, '');
-const supabaseAnonKey = (env.VITE_SUPABASE_ANON_KEY || '').trim();
+function cleanEnvString(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  let trimmed = value.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
 
-export const isSupabaseConfigured = Boolean(
-  supabaseUrl &&
-  supabaseAnonKey &&
-  /^https?:\/\//i.test(supabaseUrl) &&
-  !supabaseUrl.includes('your-project') &&
-  !supabaseAnonKey.includes('your-anon-key')
-);
+export interface ResolvedSupabaseConfig {
+  url: string;
+  anonKey: string;
+  isConfigured: boolean;
+}
+
+export function resolveSupabaseConfig(
+  envRecord?: Record<string, unknown>
+): ResolvedSupabaseConfig {
+  const source =
+    envRecord ??
+    (typeof import.meta !== 'undefined' && import.meta.env
+      ? (import.meta.env as Record<string, unknown>)
+      : typeof process !== 'undefined'
+        ? (process.env as Record<string, unknown>)
+        : {});
+
+  const rawEnvUrl = cleanEnvString(source.VITE_SUPABASE_URL);
+  const rawEnvKey = cleanEnvString(source.VITE_SUPABASE_ANON_KEY);
+
+  // Allow explicit local-demo opt-out or placeholder values to disable Supabase intentionally
+  const explicitlyDisabled =
+    rawEnvUrl.toLowerCase() === 'local' ||
+    rawEnvUrl.toLowerCase() === 'disabled' ||
+    rawEnvUrl.includes('your-project') ||
+    rawEnvKey.includes('your-anon-key');
+
+  if (explicitlyDisabled) {
+    return { url: '', anonKey: '', isConfigured: false };
+  }
+
+  const normalizedEnvUrl = rawEnvUrl
+    .replace(/\/rest\/v1\/?$/i, '')
+    .replace(/\/+$/, '');
+
+  const url = normalizedEnvUrl || DEFAULT_PUBLIC_SUPABASE_URL;
+  const anonKey = rawEnvKey || DEFAULT_PUBLIC_SUPABASE_ANON_KEY;
+
+  const isConfigured = Boolean(
+    url &&
+      anonKey &&
+      /^https?:\/\//i.test(url) &&
+      !url.includes('your-project') &&
+      !anonKey.includes('your-anon-key')
+  );
+
+  return { url, anonKey, isConfigured };
+}
+
+const resolvedConfig = resolveSupabaseConfig();
+
+export const isSupabaseConfigured = resolvedConfig.isConfigured;
 
 export const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
+  ? createClient(resolvedConfig.url, resolvedConfig.anonKey, {
       auth: {
         storage: safeStorage,
         persistSession: true,

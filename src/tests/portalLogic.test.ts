@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { usernameToEmail, emailToUsername, matchesProfileIdentifier, PORTAL_EMAIL_DOMAIN } from '../lib/supabase';
+import {
+  usernameToEmail,
+  emailToUsername,
+  matchesProfileIdentifier,
+  PORTAL_EMAIL_DOMAIN,
+  resolveSupabaseConfig,
+  DEFAULT_PUBLIC_SUPABASE_URL,
+  DEFAULT_PUBLIC_SUPABASE_ANON_KEY,
+} from '../lib/supabase';
 import { safeStorage } from '../lib/storage';
 import {
   buildWhatsAppOrderMessage,
@@ -1151,4 +1159,25 @@ test('WhatsApp container theme defaults to dark mode and normalizes/toggles safe
 
   assert.equal(toggleWhatsAppTheme('dark'), 'light');
   assert.equal(toggleWhatsAppTheme('light'), 'dark');
+});
+
+test('resolveSupabaseConfig falls back cleanly for Vercel builds without .env and strips accidental quotes', () => {
+  // Missing env (typical when .env is gitignored on Vercel) falls back to live portal Supabase config
+  const fallback = resolveSupabaseConfig({});
+  assert.equal(fallback.isConfigured, true);
+  assert.equal(fallback.url, DEFAULT_PUBLIC_SUPABASE_URL);
+  assert.equal(fallback.anonKey, DEFAULT_PUBLIC_SUPABASE_ANON_KEY);
+
+  // Quoted env vars pasted into hosting UI are unquoted & /rest/v1 normalized
+  const quoted = resolveSupabaseConfig({
+    VITE_SUPABASE_URL: '"https://custom-proj.supabase.co/rest/v1/"',
+    VITE_SUPABASE_ANON_KEY: "'sb_publishable_custom_123'",
+  });
+  assert.equal(quoted.isConfigured, true);
+  assert.equal(quoted.url, 'https://custom-proj.supabase.co');
+  assert.equal(quoted.anonKey, 'sb_publishable_custom_123');
+
+  // Explicit local/placeholder opt-out disables Supabase
+  assert.equal(resolveSupabaseConfig({ VITE_SUPABASE_URL: 'local' }).isConfigured, false);
+  assert.equal(resolveSupabaseConfig({ VITE_SUPABASE_URL: 'https://your-project.supabase.co' }).isConfigured, false);
 });

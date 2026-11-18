@@ -72,8 +72,8 @@ export default function ResellersList() {
       if (isSuperAdmin) {
         setStaffOptions(data.filter(p => p.role === 'staff' && p.status === 'active'));
       }
-    } catch (err) {
-      console.error('Failed to load resellers:', err);
+    } catch (err: any) {
+      toastError(err?.message || 'Failed to load reseller accounts.');
     } finally {
       setIsLoading(false);
     }

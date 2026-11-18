@@ -45,6 +45,8 @@ export const STALE_DEMO_STORAGE_KEYS = [
   'profiles',
   'orders',
   'passwords',
+  'staff_permissions',
+  'activity_log',
 ] as const;
 
 let brandsTableMissing = false;
@@ -2135,7 +2137,9 @@ export const dataService = {
   // PROFILES & RESELLERS
   async getAllProfilesRaw(): Promise<Profile[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('profiles').select('*').order('created_at', { ascending: false })
+      );
       if (!error && data) return data as Profile[];
       if (error) throw new Error(error.message);
     }
@@ -2144,7 +2148,9 @@ export const dataService = {
 
   async getProfiles(): Promise<Profile[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('profiles').select('*').order('created_at', { ascending: false })
+      );
       if (!error && data) return data as Profile[];
       if (error) throw new Error(error.message);
     }
@@ -2161,8 +2167,11 @@ export const dataService = {
 
   async getProfileById(id: string): Promise<Profile | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle();
-      if (!error && data) return data as Profile;
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!.from('profiles').select('*').eq('id', id).maybeSingle()
+      );
+      if (error) throw new Error(error.message);
+      return (data as Profile) || null;
     }
     const { actor, staffPerms } = getLocalActorContext();
     const profiles = getLocalItem<Profile[]>('profiles', SEED_PROFILES);
@@ -2178,11 +2187,13 @@ export const dataService = {
 
   async getStaffPermissionsByUserId(userId: string): Promise<StaffPermissionsRecord | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from('staff_permissions')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle();
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!
+          .from('staff_permissions')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle()
+      );
       if (!error && data) return data as StaffPermissionsRecord;
       return null;
     }
@@ -2448,9 +2459,14 @@ export const dataService = {
   // STAFF ADMINS (Super Admin Only)
   async getStaffMembers(): Promise<StaffMember[]> {
     if (isSupabaseConfigured && supabase) {
-      const [{ data: profiles, error: pErr }, { data: perms, error: spErr }] = await Promise.all([
-        supabase.from('profiles').select('*').eq('role', 'staff').order('created_at', { ascending: false }),
-        supabase.from('staff_permissions').select('*'),
+      const [
+        { data: profiles, error: pErr },
+        { data: perms, error: spErr },
+      ] = await Promise.all([
+        withJwtRefresh(() =>
+          supabase!.from('profiles').select('*').eq('role', 'staff').order('created_at', { ascending: false })
+        ),
+        withJwtRefresh(() => supabase!.from('staff_permissions').select('*')),
       ]);
       if (pErr) throw new Error(pErr.message);
       if (spErr) throw new Error(spErr.message);
@@ -2720,11 +2736,13 @@ export const dataService = {
   // ACTIVITY LOGS (Super Admin Only)
   async getActivityLogs(): Promise<AdminActivityLog[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from('admin_activity_log')
-        .select('*, actor:actor_id(id, username, full_name, role)')
-        .order('created_at', { ascending: false })
-        .limit(500);
+      const { data, error } = await withJwtRefresh(() =>
+        supabase!
+          .from('admin_activity_log')
+          .select('*, actor:actor_id(id, username, full_name, role)')
+          .order('created_at', { ascending: false })
+          .limit(500)
+      );
       if (!error && data) return data as AdminActivityLog[];
       if (error) throw new Error(error.message);
     }
